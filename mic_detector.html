@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+</head>
+<body style="margin:0;background:transparent">
+<script>
+var umbral = 60;
+var escuchando = false;
+var ctx, analizador, mic, datos;
+var ultimaAlerta = 0;
+var COOLDOWN = 2000;
+
+function procesarComando(hash){
+  var cmd = hash.replace('#','');
+  if(cmd === 'iniciar') iniciar();
+  else if(cmd === 'detener') detener();
+  else if(cmd.indexOf('umbral:') === 0) fijarUmbral(cmd.split(':')[1]);
+}
+
+window.addEventListener('hashchange', function(){
+  procesarComando(location.hash);
+});
+
+window.addEventListener('load', function(){
+  if(location.hash) procesarComando(location.hash);
+});
+
+function fijarUmbral(v){
+  umbral = Number(v);
+}
+
+function iniciar(){
+  if(escuchando) return;
+  navigator.mediaDevices.getUserMedia({audio:true, video:false})
+  .then(function(stream){
+    ctx = new (window.AudioContext || window.webkitAudioContext)();
+    analizador = ctx.createAnalyser();
+    analizador.fftSize = 512;
+    mic = ctx.createMediaStreamSource(stream);
+    mic.connect(analizador);
+    datos = new Float32Array(analizador.fftSize);
+    escuchando = true;
+    medir();
+    enviar('listo', 0, 'ninguno', '');
+  })
+  .catch(function(){
+    enviar('error', 0, 'ninguno', '');
+  });
+}
+
+function detener(){
+  escuchando = false;
+  if(ctx){ ctx.close(); ctx = null; }
+  enviar('detenido', 0, 'ninguno', '');
+}
+
+function medir(){
+  if(!escuchando) return;
+  analizador.getFloatTimeDomainData(datos);
+  var rms = 0;
+  for(var i = 0; i < datos.length; i++) rms += datos[i] * datos[i];
+  rms = Math.sqrt(rms / datos.length);
+  var db = rms > 0.00001 ? 20 * Math.log10(rms) : -100;
+  var nivel = Math.max(0, Math.min(100, db + 100));
+  var clasificacion = clasificar(nivel);
+  var ahora = Date.now();
+  if(nivel >= umbral && ahora - ultimaAlerta > COOLDOWN){
+    ultimaAlerta = ahora;
+    enviar('alerta', Math.round(nivel), clasificacion, fechaHora());
+  }
+  requestAnimationFrame(medir);
+}
+
+function clasificar(nivel){
+  if(nivel >= 80) return 'alto';
+  if(nivel >= 55) return 'medio';
+  return 'bajo';
+}
+
+function fechaHora(){
+  var d = new Date();
+  var pad = function(n){ return n < 10 ? '0'+n : n; };
+  return pad(d.getDate())+'/'+pad(d.getMonth()+1)+'/'+d.getFullYear()
+    +' '+pad(d.getHours())+':'+pad(d.getMinutes());
+}
+
+function enviar(tipo, nivel, clasificacion, fecha){
+  var msg = JSON.stringify({
+    tipo: tipo,
+    nivel: nivel,
+    clasificacion: clasificacion,
+    fecha: fecha
+  });
+  try{ window.ReactNativeWebView.postMessage(msg); }catch(e){}
+}
+</script>
+</body>
+</html>
